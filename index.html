@@ -950,7 +950,7 @@ function showSection(name) {
 // ─── INICIO ───────────────────────────────────────────────
 async function loadInicio() {
   // Refresh coins
-  const { data: me } = await db.from('usuarios').select('monedas').eq('id', currentUser.id).single();
+  const { data: me } = await db.from('usuarios').select('monedas').eq('identificac', currentUser.identificac).single();
   if (me) { currentUser.monedas = me.monedas; updateTopbarCoins(me.monedas); }
 
   document.getElementById('home-coins').textContent = currentUser.monedas;
@@ -1085,7 +1085,7 @@ async function confirmarCanje() {
     estado: 'pendiente'
   });
 
-  await db.from('usuarios').update({ monedas: nuevasMonedas }).eq('id', currentUser.id);
+  await db.from('usuarios').update({ monedas: nuevasMonedas }).eq('identificac', currentUser.identificac);
   await db.from('movimientos').insert({
     usuario: currentUser.usuario,
     descripcion: 'Canje: ' + pendingCanje.nombre,
@@ -1130,7 +1130,7 @@ async function loadAdmin() {
 }
 
 async function fillUserSelects() {
-  const { data } = await db.from('usuarios').select('id,nombre,usuario').order('nombre');
+  const { data } = await db.from('usuarios').select('identificac,nombre,usuario').order('nombre');
   const opts = (data || []).map(u => `<option value="${u.usuario}">${u.nombre} (@${u.usuario})</option>`).join('');
   document.getElementById('venta-usuario').innerHTML = opts;
   document.getElementById('asig-usuario').innerHTML = opts;
@@ -1158,13 +1158,13 @@ async function cargarVenta() {
   const coins = parseInt(opt.dataset.coins);
 
   // Get current coins of target user
-  const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuarioDestino).single();
+  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
   if (!target) return;
 
   const nuevas = target.monedas + coins;
 
   await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: 'Venta: ' + productoNombre, monedas: coins });
-  await db.from('usuarios').update({ monedas: nuevas }).eq('id', target.id);
+  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
 
   showToast(`✅ +${coins} monedas a @${usuarioDestino}`, 'success');
   if (usuarioDestino === currentUser.usuario) { currentUser.monedas = nuevas; updateTopbarCoins(nuevas); }
@@ -1177,12 +1177,12 @@ async function asignarMonedas() {
 
   if (isNaN(cantidad) || cantidad === 0) { showToast('Ingresá una cantidad válida', 'error'); return; }
 
-  const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuarioDestino).single();
+  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
   if (!target) return;
 
   const nuevas = Math.max(0, target.monedas + cantidad);
   await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: motivo, monedas: cantidad });
-  await db.from('usuarios').update({ monedas: nuevas }).eq('id', target.id);
+  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
 
   showToast(`✅ ${cantidad > 0 ? '+' : ''}${cantidad} monedas a @${usuarioDestino}`, 'success');
   document.getElementById('asig-cantidad').value = '';
@@ -1218,8 +1218,8 @@ async function loadAdminUsers() {
       <td><span class="badge ${u.rol === 'admin' ? 'badge-purple' : 'badge-blue'}">${u.rol}</span></td>
       <td>🪙 ${u.monedas}</td>
       <td>
-        ${u.id !== currentUser.id
-          ? `<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.id}', '${u.nombre}')">Eliminar</button>`
+        ${u.identificac !== currentUser.identificac
+          ? `<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.identificac}', '${u.nombre}')">Eliminar</button>`
           : '<span style="color:var(--text-dim);font-size:12px">Sos vos</span>'}
       </td>
     </tr>
@@ -1228,7 +1228,7 @@ async function loadAdminUsers() {
 
 async function eliminarUsuario(id, nombre) {
   if (!confirm(`¿Eliminar a ${nombre}?`)) return;
-  await db.from('usuarios').delete().eq('id', id);
+  await db.from('usuarios').delete().eq('identificac', id);
   showToast('Usuario eliminado', 'success');
   loadAdminUsers();
   fillUserSelects();
@@ -1297,9 +1297,9 @@ async function resolverCanje(id, estado, costo, usuario) {
 
   if (estado === 'rechazado' && costo && usuario) {
     // Devolver monedas
-    const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuario).single();
+    const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuario).single();
     if (target) {
-      await db.from('usuarios').update({ monedas: target.monedas + costo }).eq('id', target.id);
+      await db.from('usuarios').update({ monedas: target.monedas + costo }).eq('identificac', target.identificac);
       await db.from('movimientos').insert({ usuario, descripcion: 'Canje rechazado - devolución', monedas: costo });
     }
   }
