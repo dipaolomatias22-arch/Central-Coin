@@ -929,7 +929,7 @@ function updateTopbarCoins(n) {
 }
 
 async function loadProducts() {
-  const { data } = await db.from('productos').select('*').order('identificac');
+  const { data } = await db.from('productos').select('*').order('id');
   allProducts = data || [];
 }
 
@@ -950,7 +950,7 @@ function showSection(name) {
 // ─── INICIO ───────────────────────────────────────────────
 async function loadInicio() {
   // Refresh coins
-  const { data: me } = await db.from('usuarios').select('monedas').eq('identificac', currentUser.identificac).single();
+  const { data: me } = await db.from('usuarios').select('monedas').eq('id', currentUser.id).single();
   if (me) { currentUser.monedas = me.monedas; updateTopbarCoins(me.monedas); }
 
   document.getElementById('home-coins').textContent = currentUser.monedas;
@@ -1006,7 +1006,7 @@ async function loadMovimientos() {
       <div class="mov-item">
         <div class="mov-icon ${plus ? 'plus' : 'minus'}">${plus ? '⬆️' : '⬇️'}</div>
         <div class="mov-desc">
-          <div class="title">${m.descripción}</div>
+          <div class="title">${m.descripcion}</div>
           <div class="date">${fecha}</div>
         </div>
         <div class="mov-amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : ''}${m.monedas} 🪙</div>
@@ -1024,9 +1024,9 @@ async function loadPremios() {
   document.getElementById('premios-grid').innerHTML = data.map((p, i) => `
     <div class="premio-card">
       <div class="premio-icon">${premioIcons[i % premioIcons.length]}</div>
-      <div class="premio-name">${p.descripción}</div>
+      <div class="premio-name">${p.descripcion}</div>
       <div class="premio-cost">${p.costo} <span>Central Coins</span></div>
-      <button class="btn btn-gold btn-sm" onclick="abrirCanje(${p.identificac}, '${p.descripción}', ${p.costo})">Canjear</button>
+      <button class="btn btn-gold btn-sm" onclick="abrirCanje(${p.id}, '${p.descripcion}', ${p.costo})">Canjear</button>
     </div>
   `).join('');
 }
@@ -1085,10 +1085,10 @@ async function confirmarCanje() {
     estado: 'pendiente'
   });
 
-  await db.from('usuarios').update({ monedas: nuevasMonedas }).eq('identificac', currentUser.identificac);
+  await db.from('usuarios').update({ monedas: nuevasMonedas }).eq('id', currentUser.id);
   await db.from('movimientos').insert({
     usuario: currentUser.usuario,
-    descripción: 'Canje: ' + pendingCanje.nombre,
+    descripcion: 'Canje: ' + pendingCanje.nombre,
     monedas: -pendingCanje.costo
   });
 
@@ -1130,7 +1130,7 @@ async function loadAdmin() {
 }
 
 async function fillUserSelects() {
-  const { data } = await db.from('usuarios').select('identificac,nombre,usuario').order('nombre');
+  const { data } = await db.from('usuarios').select('id,nombre,usuario').order('nombre');
   const opts = (data || []).map(u => `<option value="${u.usuario}">${u.nombre} (@${u.usuario})</option>`).join('');
   document.getElementById('venta-usuario').innerHTML = opts;
   document.getElementById('asig-usuario').innerHTML = opts;
@@ -1138,7 +1138,7 @@ async function fillUserSelects() {
 
 function fillProductSelect() {
   document.getElementById('venta-producto').innerHTML = allProducts.map(p =>
-    `<option value="${p.identificac}" data-coins="${p.Monedas}">${p.Nombre} (🪙 ${p.Monedas})</option>`
+    `<option value="${p.id}" data-coins="${p.Monedas}">${p.Nombre} (🪙 ${p.Monedas})</option>`
   ).join('');
   updateVentaCoins();
 }
@@ -1158,13 +1158,13 @@ async function cargarVenta() {
   const coins = parseInt(opt.dataset.coins);
 
   // Get current coins of target user
-  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
+  const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuarioDestino).single();
   if (!target) return;
 
   const nuevas = target.monedas + coins;
 
-  await db.from('movimientos').insert({ usuario: usuarioDestino, descripción: 'Venta: ' + productoNombre, monedas: coins });
-  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
+  await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: 'Venta: ' + productoNombre, monedas: coins });
+  await db.from('usuarios').update({ monedas: nuevas }).eq('id', target.id);
 
   showToast(`✅ +${coins} monedas a @${usuarioDestino}`, 'success');
   if (usuarioDestino === currentUser.usuario) { currentUser.monedas = nuevas; updateTopbarCoins(nuevas); }
@@ -1177,12 +1177,12 @@ async function asignarMonedas() {
 
   if (isNaN(cantidad) || cantidad === 0) { showToast('Ingresá una cantidad válida', 'error'); return; }
 
-  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
+  const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuarioDestino).single();
   if (!target) return;
 
   const nuevas = Math.max(0, target.monedas + cantidad);
-  await db.from('movimientos').insert({ usuario: usuarioDestino, descripción: motivo, monedas: cantidad });
-  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
+  await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: motivo, monedas: cantidad });
+  await db.from('usuarios').update({ monedas: nuevas }).eq('id', target.id);
 
   showToast(`✅ ${cantidad > 0 ? '+' : ''}${cantidad} monedas a @${usuarioDestino}`, 'success');
   document.getElementById('asig-cantidad').value = '';
@@ -1218,8 +1218,8 @@ async function loadAdminUsers() {
       <td><span class="badge ${u.rol === 'admin' ? 'badge-purple' : 'badge-blue'}">${u.rol}</span></td>
       <td>🪙 ${u.monedas}</td>
       <td>
-        ${u.identificac !== currentUser.identificac
-          ? `<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.identificac}', '${u.nombre}')">Eliminar</button>`
+        ${u.id !== currentUser.id
+          ? `<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.id}', '${u.nombre}')">Eliminar</button>`
           : '<span style="color:var(--text-dim);font-size:12px">Sos vos</span>'}
       </td>
     </tr>
@@ -1228,7 +1228,7 @@ async function loadAdminUsers() {
 
 async function eliminarUsuario(id, nombre) {
   if (!confirm(`¿Eliminar a ${nombre}?`)) return;
-  await db.from('usuarios').delete().eq('identificac', id);
+  await db.from('usuarios').delete().eq('id', id);
   showToast('Usuario eliminado', 'success');
   loadAdminUsers();
   fillUserSelects();
@@ -1239,7 +1239,7 @@ async function crearPremio() {
   const costo = parseInt(document.getElementById('new-premio-costo').value);
   if (!desc || isNaN(costo)) { showToast('Completá los campos', 'error'); return; }
 
-  await db.from('Premios').insert({ descripción: desc, costo });
+  await db.from('Premios').insert({ descripcion: desc, costo });
   showToast('✅ Premio agregado', 'success');
   document.getElementById('new-premio-desc').value = '';
   document.getElementById('new-premio-costo').value = '';
@@ -1250,16 +1250,16 @@ async function loadAdminPremios() {
   const { data } = await db.from('Premios').select('*').order('costo');
   document.getElementById('premios-admin-table').innerHTML = (data || []).map(p => `
     <tr>
-      <td>${p.descripción}</td>
+      <td>${p.descripcion}</td>
       <td>🪙 ${p.costo}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="eliminarPremio(${p.identificac})">Eliminar</button></td>
+      <td><button class="btn btn-danger btn-sm" onclick="eliminarPremio(${p.id})">Eliminar</button></td>
     </tr>
   `).join('');
 }
 
 async function eliminarPremio(id) {
   if (!confirm('¿Eliminar este premio?')) return;
-  await db.from('Premios').delete().eq('identificac', id);
+  await db.from('Premios').delete().eq('id', id);
   showToast('Premio eliminado', 'success');
   loadAdminPremios();
 }
@@ -1283,8 +1283,8 @@ async function loadAdminCanjes() {
             <td>🪙 ${c.costo}</td>
             <td>${fecha}</td>
             <td style="display:flex;gap:6px">
-              <button class="btn btn-green btn-sm" onclick="resolverCanje(${c.identificac},'aprobado')">✅ Aprobar</button>
-              <button class="btn btn-danger btn-sm" onclick="resolverCanje(${c.identificac},'rechazado',${c.costo},'${c.usuario}')">❌ Rechazar</button>
+              <button class="btn btn-green btn-sm" onclick="resolverCanje(${c.id},'aprobado')">✅ Aprobar</button>
+              <button class="btn btn-danger btn-sm" onclick="resolverCanje(${c.id},'rechazado',${c.costo},'${c.usuario}')">❌ Rechazar</button>
             </td>
           </tr>`;
         }).join('')}
@@ -1293,14 +1293,14 @@ async function loadAdminCanjes() {
 }
 
 async function resolverCanje(id, estado, costo, usuario) {
-  await db.from('Canjes').update({ estado }).eq('identificac', id);
+  await db.from('Canjes').update({ estado }).eq('id', id);
 
   if (estado === 'rechazado' && costo && usuario) {
     // Devolver monedas
-    const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuario).single();
+    const { data: target } = await db.from('usuarios').select('monedas,id').eq('usuario', usuario).single();
     if (target) {
-      await db.from('usuarios').update({ monedas: target.monedas + costo }).eq('identificac', target.identificac);
-      await db.from('movimientos').insert({ usuario, descripción: 'Canje rechazado - devolución', monedas: costo });
+      await db.from('usuarios').update({ monedas: target.monedas + costo }).eq('id', target.id);
+      await db.from('movimientos').insert({ usuario, descripcion: 'Canje rechazado - devolución', monedas: costo });
     }
   }
 
@@ -1328,5 +1328,3 @@ function showToast(msg, type = 'success') {
 </script>
 </body>
 </html>
-
-
