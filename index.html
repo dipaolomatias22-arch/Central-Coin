@@ -960,7 +960,7 @@ async function loadInicio() {
   const { data: movHoy } = await db.from('movimientos')
     .select('monedas')
     .eq('usuario', currentUser.usuario)
-    .gte('creado_en', hoy.toISOString())
+    .gte('created_at', hoy.toISOString())
     .gt('monedas', 0);
 
   const ventasHoy = movHoy?.length || 0;
@@ -969,19 +969,19 @@ async function loadInicio() {
   document.getElementById('home-ganadas-hoy').textContent = ganadasHoy;
 
   // Ranking position
-  const { data: todos } = await db.from('usuarios').select('usuario,monedas').order('monedas', { ascending: false });
-  const pos = (todos || []).findIndex(u => u.usuario === currentUser.usuario) + 1;
+  const ranking = await getRanking();
+  const pos = ranking.findIndex(u => u.usuario === currentUser.usuario) + 1;
   document.getElementById('home-posicion').textContent = '#' + (pos || '-');
 
   // Top 5
-  const top5 = (todos || []).slice(0, 5);
+  const top5 = ranking.slice(0, 5);
   const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
   const posClasses = ['gold','silver','bronze','',''];
   document.getElementById('home-top5').innerHTML = top5.map((u, i) => `
     <div class="rank-item">
       <div class="rank-pos ${posClasses[i]}">${medals[i]}</div>
-      <div class="rank-name">${u.usuario}</div>
-      <div class="rank-coins">🪙 ${u.monedas}</div>
+      <div class="rank-name">${u.nombre}</div>
+      <div class="rank-coins">🪙 ${u.ganadas} ganadas</div>
     </div>
   `).join('') || '<div class="empty"><p>Sin datos</p></div>';
 }
@@ -991,7 +991,7 @@ async function loadMovimientos() {
   const { data } = await db.from('movimientos')
     .select('*')
     .eq('usuario', currentUser.usuario)
-    .order('creado_en', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(50);
 
   if (!data || data.length === 0) {
@@ -1001,7 +1001,7 @@ async function loadMovimientos() {
 
   document.getElementById('mov-list').innerHTML = data.map(m => {
     const plus = m.monedas > 0;
-    const fecha = new Date(m.creado_en).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    const fecha = new Date(m.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
     return `
       <div class="mov-item">
         <div class="mov-icon ${plus ? 'plus' : 'minus'}">${plus ? '⬆️' : '⬇️'}</div>
@@ -1026,7 +1026,7 @@ async function loadPremios() {
       <div class="premio-icon">${premioIcons[i % premioIcons.length]}</div>
       <div class="premio-name">${p.descripcion}</div>
       <div class="premio-cost">${p.costo} <span>Central Coins</span></div>
-      <button class="btn btn-gold btn-sm" onclick="abrirCanje(${p.id}, '${p.descripcion}', ${p.costo})">Canjear</button>
+      <button class="btn btn-gold btn-sm" data-id="${p.id}" data-nombre="${p.descripcion}" data-costo="${p.costo}" onclick="abrirCanjeBtn(this)">Canjear</button>
     </div>
   `).join('');
 }
@@ -1035,7 +1035,7 @@ async function loadCanjes() {
   const { data } = await db.from('Canjes')
     .select('*')
     .eq('usuario', currentUser.usuario)
-    .order('creado_en', { ascending: false });
+    .order('created_at', { ascending: false });
 
   if (!data || data.length === 0) {
     document.getElementById('canjes-list').innerHTML = '<div class="empty"><div class="icon">🛒</div><p>Todavía no canjeaste nada</p></div>';
@@ -1047,7 +1047,7 @@ async function loadCanjes() {
       <thead><tr><th>Premio</th><th>Costo</th><th>Fecha</th><th>Estado</th></tr></thead>
       <tbody>
         ${data.map(c => {
-          const fecha = new Date(c.creado_en).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+          const fecha = new Date(c.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
           const badgeClass = c.estado === 'pendiente' ? 'badge-gold' : c.estado === 'aprobado' ? 'badge-green' : 'badge-red';
           return `<tr>
             <td>${c.premio}</td>
@@ -1058,6 +1058,10 @@ async function loadCanjes() {
         }).join('')}
       </tbody>
     </table></div>`;
+}
+
+function abrirCanjeBtn(btn) {
+  abrirCanje(btn.dataset.id, btn.dataset.nombre, parseInt(btn.dataset.costo));
 }
 
 function abrirCanje(id, nombre, costo) {
@@ -1100,22 +1104,39 @@ async function confirmarCanje() {
   pendingCanje = null;
 }
 
+// ─── RANKING HELPER ───────────────────────────────────────
+async function getRanking() {
+  // Traer todos los movimientos positivos
+  const { data: movs } = await db.from('movimientos').select('usuario,monedas').gt('monedas', 0);
+  // Traer todos los usuarios para tener nombre
+  const { data: users } = await db.from('usuarios').select('nombre,usuario');
+  if (!movs || !users) return [];
+
+  const totales = {};
+  movs.forEach(m => {
+    totales[m.usuario] = (totales[m.usuario] || 0) + Number(m.monedas);
+  });
+
+  return users
+    .map(u => ({ nombre: u.nombre, usuario: u.usuario, ganadas: totales[u.usuario] || 0 }))
+    .sort((a, b) => b.ganadas - a.ganadas);
+}
+
 // ─── RANKING ──────────────────────────────────────────────
 async function loadRanking() {
-  const { data } = await db.from('usuarios').select('nombre,usuario,monedas').order('monedas', { ascending: false });
-  if (!data) return;
+  const ranking = await getRanking();
 
   const medals = { 0: '🥇', 1: '🥈', 2: '🥉' };
   const posClasses = { 0: 'gold', 1: 'silver', 2: 'bronze' };
 
-  document.getElementById('ranking-list').innerHTML = data.map((u, i) => `
+  document.getElementById('ranking-list').innerHTML = ranking.map((u, i) => `
     <div class="rank-item">
       <div class="rank-pos ${posClasses[i] || ''}">${medals[i] || (i + 1)}</div>
       <div class="rank-name">
         ${u.nombre}
         ${u.usuario === currentUser.usuario ? '<span class="badge badge-blue" style="margin-left:8px">Vos</span>' : ''}
       </div>
-      <div class="rank-coins">🪙 ${u.monedas}</div>
+      <div class="rank-coins">🪙 ${u.ganadas} ganadas</div>
     </div>
   `).join('');
 }
@@ -1265,7 +1286,7 @@ async function eliminarPremio(id) {
 }
 
 async function loadAdminCanjes() {
-  const { data } = await db.from('Canjes').select('*').eq('estado', 'pendiente').order('creado_en');
+  const { data } = await db.from('Canjes').select('*').eq('estado', 'pendiente').order('created_at');
   if (!data || data.length === 0) {
     document.getElementById('canjes-admin-list').innerHTML = '<div class="empty"><div class="icon">✅</div><p>No hay canjes pendientes</p></div>';
     return;
@@ -1276,7 +1297,7 @@ async function loadAdminCanjes() {
       <thead><tr><th>Usuario</th><th>Premio</th><th>Costo</th><th>Fecha</th><th>Acciones</th></tr></thead>
       <tbody>
         ${data.map(c => {
-          const fecha = new Date(c.creado_en).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+          const fecha = new Date(c.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
           return `<tr>
             <td>@${c.usuario}</td>
             <td>${c.premio}</td>
