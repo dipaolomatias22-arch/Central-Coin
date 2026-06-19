@@ -714,8 +714,9 @@
     <!-- RANKING -->
     <div class="section" id="sec-ranking">
       <p class="page-title">🏆 Ranking</p>
+      <div class="admin-tabs" id="ranking-tab-btns"></div>
       <div class="card">
-        <div class="card-title">Top vendedores — saldo actual</div>
+        <div class="card-title" id="ranking-label">Top vendedores</div>
         <div id="ranking-list"><div class="spinner"></div></div>
       </div>
     </div>
@@ -1102,6 +1103,24 @@ async function confirmarCanje() {
   showToast('✅ Canje solicitado, pendiente de aprobación', 'success');
   loadCanjes();
   pendingCanje = null;
+}
+
+// ─── RANKING HELPER ───────────────────────────────────────
+async function getRanking() {
+  // Traer todos los movimientos positivos
+  const { data: movs } = await db.from('movimientos').select('usuario,monedas').gt('monedas', 0);
+  // Traer todos los usuarios para tener nombre
+  const { data: users } = await db.from('usuarios').select('nombre,usuario');
+  if (!movs || !users) return [];
+
+  const totales = {};
+  movs.forEach(m => {
+    totales[m.usuario] = (totales[m.usuario] || 0) + Number(m.monedas);
+  });
+
+  return users
+    .map(u => ({ nombre: u.nombre, usuario: u.usuario, ganadas: totales[u.usuario] || 0 }))
+    .sort((a, b) => b.ganadas - a.ganadas);
 }
 
 // ─── RANKING HELPER ───────────────────────────────────────
