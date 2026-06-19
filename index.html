@@ -858,6 +858,1320 @@
 <script>
 const SUPABASE_URL = 'https://iflmcrghdjkhirtzuqqq.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmbG1jcmdoZGpraGlydHp1cXFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3OTQzMDEsImV4cCI6MjA5NzM3MDMwMX0.UmmMTDA8tp1dNnFmQRBc38iWVPNaylhOWLqlY3jCYlo';
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let currentUser = null;
+let pendingCanje = null;
+let allProducts = [];
+let refreshTimer = null;
+
+// ─── EMOJI PREMIOS ────────────────────────────────────────
+function getPremioIcon(nombre) {
+  const n = (nombre || '').toLowerCase();
+  if (n.includes("30") || n.includes("minuto") || n.includes("favor")) return "⏰";
+  if (n.includes("caja") || n.includes("misteriosa") || n.includes("sorpresa")) return "🎁";
+  if (n.includes("almuerzo") || n.includes("delivery")) return "🛵";
+  if (n.includes("medio") || n.includes("libre")) return "🎉";
+  if (n.includes("cena") || n.includes("pasta") || n.includes("dos")) return "🍝";
+  if (n.includes("cafe") || n.includes("café")) return "☕";
+  if (n.includes("salida")) return "🚪";
+  if (n.includes("gift") || n.includes("card") || n.includes("tarjeta")) return "💳";
+  return "🎀";
+}
+
+// ─── SESION PERSISTENTE ───────────────────────────────────
+function saveSession(u) { try { localStorage.setItem('cc_session', JSON.stringify(u)); } catch(e){} }
+function clearSession() { try { localStorage.removeItem('cc_session'); } catch(e){} }
+function getSavedSession() { try { return JSON.parse(localStorage.getItem('cc_session')); } catch(e){ return null; } }
+
+// ─── SEMANAS Y MESES ──────────────────────────────────────
+function getInicioSemana() {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = (day === 0) ? -6 : 1 - day;
+  const d = new Date(now);
+  d.setDate(now.getDate() + diff);
+  d.setHours(0,0,0,0);
+  return d;
+}
+function getFinSemana() {
+  const d = getInicioSemana();
+  d.setDate(d.getDate() + 5);
+  d.setHours(15,0,0,0);
+  return d;
+}
+function getInicioMes() {
+  const n = new Date();
+  return new Date(n.getFullYear(), n.getMonth(), 1, 0, 0, 0, 0);
+}
+
+// ─── LOGIN ────────────────────────────────────────────────
+async function doLogin() {
+  const usuario = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+  if (!usuario || !pass) { errEl.textContent = 'Completá usuario y contraseña'; errEl.style.display = 'block'; return; }
+  const { data, error } = await db.from('usuarios').select('*').eq('usuario', usuario).eq('contrasena', pass).single();
+  if (error || !data) { errEl.textContent = 'Usuario o contraseña incorrectos'; errEl.style.display = 'block'; return; }
+  currentUser = data;
+  saveSession(data);
+  initApp();
+}
+
+function logout() {
+  currentUser = null;
+  clearSession();
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-user').value = '';
+  document.getElementById('login-pass').value = '';
+}
+
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+// ─── INIT ─────────────────────────────────────────────────
+function initApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('topbar-name').textContent = currentUser.nombre;
+  updateTopbarCoins(currentUser.monedas);
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = currentUser.rol === 'admin' ? 'flex' : 'none';
+  });
+  showSection('inicio');
+  loadProducts();
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(silentRefresh, 30000);
+}
+
+async function silentRefresh() {
+  if (!currentUser) return;
+  const { data: me } = await db.from('usuarios').select('monedas').eq('identificac', currentUser.identificac).single();
+  if (!me) return;
+  if (me.monedas !== currentUser.monedas) {
+    currentUser.monedas = me.monedas;
+    saveSession(currentUser);
+    updateTopbarCoins(me.monedas);
+    const sec = document.querySelector('.section.active')?.id?.replace('sec-','');
+    if (sec === 'inicio') loadInicio();
+    if (sec === 'monedas') loadMovimientos();
+    if (sec === 'tienda') { loadPremios(); loadCanjes(); }
+    if (sec === 'ranking') loadRanking();
+    if (sec === 'admin') loadAdminCanjes();
+  }
+}
+
+function updateTopbarCoins(n) { document.getElementById('topbar-coins').textContent = '🪙 ' + n; }
+
+async function loadProducts() {
+  const { data } = await db.from('productos').select('*').order('id');
+  allProducts = data || [];
+}
+
+// ─── NAVEGACION ───────────────────────────────────────────
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('sec-' + name).classList.add('active');
+  document.querySelector('[data-sec="' + name + '"]')?.classList.add('active');
+  if (name === 'inicio') loadInicio();
+  if (name === 'monedas') loadMovimientos();
+  if (name === 'tienda') { loadPremios(); loadCanjes(); }
+  if (name === 'ranking') loadRanking();
+  if (name === 'admin' && currentUser.rol === 'admin') loadAdmin();
+}
+
+// ─── INICIO ───────────────────────────────────────────────
+async function loadInicio() {
+  const { data: me } = await db.from('usuarios').select('monedas').eq('identificac', currentUser.identificac).single();
+  if (me) { currentUser.monedas = me.monedas; saveSession(currentUser); updateTopbarCoins(me.monedas); }
+  document.getElementById('home-coins').textContent = currentUser.monedas;
+
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const { data: movHoy } = await db.from('movimientos').select('monedas').eq('usuario', currentUser.usuario).gte('created_at', hoy.toISOString()).gt('monedas', 0);
+  document.getElementById('home-ventas-hoy').textContent = movHoy?.length || 0;
+  document.getElementById('home-ganadas-hoy').textContent = movHoy?.reduce((s,m) => s + Number(m.monedas), 0) || 0;
+
+  const ranking = await getRankingSemanal();
+  const pos = ranking.findIndex(u => u.usuario === currentUser.usuario) + 1;
+  document.getElementById('home-posicion').textContent = '#' + (pos || '-');
+
+  const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+  const posClasses = ['gold','silver','bronze','',''];
+  document.getElementById('home-top5').innerHTML = ranking.slice(0,5).map((u,i) => `
+    <div class="rank-item">
+      <div class="rank-pos ${posClasses[i]}">${medals[i]}</div>
+      <div class="rank-name">${u.nombre}</div>
+      <div class="rank-coins">🪙 ${u.ganadas}</div>
+    </div>`).join('') || '<div class="empty"><p>Sin datos esta semana</p></div>';
+}
+
+// ─── MOVIMIENTOS ──────────────────────────────────────────
+async function loadMovimientos() {
+  const { data } = await db.from('movimientos').select('*').eq('usuario', currentUser.usuario).order('created_at', { ascending: false }).limit(50);
+  if (!data || data.length === 0) {
+    document.getElementById('mov-list').innerHTML = '<div class="empty"><div class="icon">📭</div><p>Sin movimientos todavía</p></div>';
+    return;
+  }
+  document.getElementById('mov-list').innerHTML = data.map(m => {
+    const plus = m.monedas > 0;
+    const fecha = new Date(m.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    return `<div class="mov-item">
+      <div class="mov-icon ${plus?'plus':'minus'}">${plus?'⬆️':'⬇️'}</div>
+      <div class="mov-desc"><div class="title">${m.descripcion}</div><div class="date">${fecha}</div></div>
+      <div class="mov-amount ${plus?'plus':'minus'}">${plus?'+':''}${m.monedas} 🪙</div>
+    </div>`;
+  }).join('');
+}
+
+// ─── TIENDA ───────────────────────────────────────────────
+async function loadPremios() {
+  const { data } = await db.from('Premios').select('*').order('costo');
+  if (!data) return;
+  document.getElementById('premios-grid').innerHTML = data.map(p => `
+    <div class="premio-card">
+      <div class="premio-icon">${getPremioIcon(p.descripcion)}</div>
+      <div class="premio-name">${p.descripcion}</div>
+      <div class="premio-cost">${p.costo} <span>Central Coins</span></div>
+      <button class="btn btn-gold btn-sm" data-id="${p.id}" data-nombre="${p.descripcion}" data-costo="${p.costo}" onclick="abrirCanjeBtn(this)">Canjear</button>
+    </div>`).join('');
+}
+
+async function loadCanjes() {
+  const { data } = await db.from('Canjes').select('*').eq('usuario', currentUser.usuario).order('created_at', { ascending: false });
+  if (!data || data.length === 0) {
+    document.getElementById('canjes-list').innerHTML = '<div class="empty"><div class="icon">🛒</div><p>Todavía no canjeaste nada</p></div>';
+    return;
+  }
+  document.getElementById('canjes-list').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Premio</th><th>Costo</th><th>Fecha</th><th>Estado</th></tr></thead>
+    <tbody>${data.map(c => {
+      const fecha = new Date(c.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+      const bc = c.estado === 'pendiente' ? 'badge-gold' : c.estado === 'aprobado' ? 'badge-green' : 'badge-red';
+      return `<tr><td>${c.premio}</td><td>🪙 ${c.costo}</td><td>${fecha}</td><td><span class="badge ${bc}">${c.estado}</span></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+function abrirCanjeBtn(btn) { abrirCanje(btn.dataset.id, btn.dataset.nombre, parseInt(btn.dataset.costo)); }
+
+function abrirCanje(id, nombre, costo) {
+  pendingCanje = { id, nombre, costo };
+  document.getElementById('modal-canje-nombre').textContent = nombre;
+  document.getElementById('modal-canje-costo').textContent = costo + ' 🪙';
+  document.getElementById('modal-canje-saldo').textContent = currentUser.monedas;
+  document.getElementById('modal-canje').classList.add('open');
+}
+
+async function confirmarCanje() {
+  if (!pendingCanje) return;
+  if (currentUser.monedas < pendingCanje.costo) {
+    showToast('No tenés suficientes monedas 😔', 'error');
+    closeModal('modal-canje'); return;
+  }
+  const nuevas = currentUser.monedas - pendingCanje.costo;
+  await db.from('Canjes').insert({ usuario: currentUser.usuario, premio: pendingCanje.nombre, costo: pendingCanje.costo, estado: 'pendiente' });
+  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', currentUser.identificac);
+  await db.from('movimientos').insert({ usuario: currentUser.usuario, descripcion: 'Canje: ' + pendingCanje.nombre, monedas: -pendingCanje.costo });
+  currentUser.monedas = nuevas;
+  saveSession(currentUser);
+  updateTopbarCoins(nuevas);
+  closeModal('modal-canje');
+  showToast('✅ Canje solicitado, pendiente de aprobación', 'success');
+  loadCanjes();
+  pendingCanje = null;
+}
+
+// ─── RANKING ──────────────────────────────────────────────
+let rankingTab = 'semanal';
+
+async function getRankingSemanal() {
+  const inicio = getInicioSemana();
+  const fin = getFinSemana();
+  const { data: movs } = await db.from('movimientos').select('usuario,monedas').gt('monedas', 0).gte('created_at', inicio.toISOString()).lte('created_at', fin.toISOString());
+  const { data: users } = await db.from('usuarios').select('nombre,usuario');
+  if (!users) return [];
+  const totales = {};
+  (movs || []).forEach(m => { totales[m.usuario] = (totales[m.usuario] || 0) + Number(m.monedas); });
+  return users.map(u => ({ nombre: u.nombre, usuario: u.usuario, ganadas: totales[u.usuario] || 0 })).sort((a,b) => b.ganadas - a.ganadas);
+}
+
+async function getRankingMensual() {
+  const inicio = getInicioMes();
+  const { data: movs } = await db.from('movimientos').select('usuario,monedas').gt('monedas', 0).gte('created_at', inicio.toISOString());
+  const { data: users } = await db.from('usuarios').select('nombre,usuario');
+  if (!users) return [];
+  const totales = {};
+  (movs || []).forEach(m => { totales[m.usuario] = (totales[m.usuario] || 0) + Number(m.monedas); });
+  return users.map(u => ({ nombre: u.nombre, usuario: u.usuario, ganadas: totales[u.usuario] || 0 })).sort((a,b) => b.ganadas - a.ganadas);
+}
+
+async function loadRanking() {
+  // Render tabs
+  document.getElementById('ranking-tab-btns').innerHTML = `
+    <button class="admin-tab ${rankingTab==='semanal'?'active':''}" onclick="switchRankingTab('semanal')">📅 Esta semana</button>
+    <button class="admin-tab ${rankingTab==='mensual'?'active':''}" onclick="switchRankingTab('mensual')">📆 Este mes</button>`;
+  await renderRankingData();
+}
+
+async function switchRankingTab(tab) {
+  rankingTab = tab;
+  document.querySelectorAll('#ranking-tab-btns .admin-tab').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  await renderRankingData();
+}
+
+async function renderRankingData() {
+  document.getElementById('ranking-list').innerHTML = '<div class="spinner"></div>';
+  const data = rankingTab === 'semanal' ? await getRankingSemanal() : await getRankingMensual();
+  const inicio = rankingTab === 'semanal' ? getInicioSemana() : getInicioMes();
+  const fin = rankingTab === 'semanal' ? getFinSemana() : new Date();
+  const label = rankingTab === 'semanal'
+    ? 'Semana ' + inicio.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) + ' – ' + fin.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) + ' 15hs'
+    : 'Mes de ' + inicio.toLocaleDateString('es-AR',{month:'long',year:'numeric'});
+  document.getElementById('ranking-label').textContent = label;
+
+  const medals = {0:'🥇',1:'🥈',2:'🥉'};
+  const posClasses = {0:'gold',1:'silver',2:'bronze'};
+  document.getElementById('ranking-list').innerHTML = data.map((u,i) => `
+    <div class="rank-item">
+      <div class="rank-pos ${posClasses[i]||''}">${medals[i]||(i+1)}</div>
+      <div class="rank-name">${u.nombre}${u.usuario===currentUser.usuario?'<span class="badge badge-blue" style="margin-left:8px">Vos</span>':''}</div>
+      <div class="rank-coins">🪙 ${u.ganadas}</div>
+    </div>`).join('') || '<div class="empty"><p>Sin datos aún</p></div>';
+}
+
+// ─── ADMIN ────────────────────────────────────────────────
+async function loadAdmin() {
+  await Promise.all([loadAdminUsers(), loadAdminPremios(), loadAdminCanjes(), fillUserSelects()]);
+  fillProductSelect();
+}
+
+async function fillUserSelects() {
+  const { data } = await db.from('usuarios').select('identificac,nombre,usuario').order('nombre');
+  const opts = (data||[]).map(u => `<option value="${u.usuario}">${u.nombre} (@${u.usuario})</option>`).join('');
+  document.getElementById('venta-usuario').innerHTML = opts;
+  document.getElementById('asig-usuario').innerHTML = opts;
+}
+
+function fillProductSelect() {
+  document.getElementById('venta-producto').innerHTML = allProducts.map(p =>
+    `<option value="${p.id}" data-coins="${p.Monedas}">${p.Nombre} (🪙 ${p.Monedas})</option>`).join('');
+  updateVentaCoins();
+}
+
+function updateVentaCoins() {
+  const sel = document.getElementById('venta-producto');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('venta-coins-preview').textContent = opt ? opt.dataset.coins + ' monedas' : '-';
+}
+
+async function cargarVenta() {
+  const usuarioDestino = document.getElementById('venta-usuario').value;
+  const sel = document.getElementById('venta-producto');
+  const opt = sel.options[sel.selectedIndex];
+  const productoNombre = opt.text.split(' (')[0];
+  const coins = parseInt(opt.dataset.coins);
+  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
+  if (!target) return;
+  const nuevas = target.monedas + coins;
+  await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: 'Venta: ' + productoNombre, monedas: coins });
+  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
+  showToast('✅ +' + coins + ' monedas a @' + usuarioDestino, 'success');
+  if (usuarioDestino === currentUser.usuario) { currentUser.monedas = nuevas; saveSession(currentUser); updateTopbarCoins(nuevas); }
+}
+
+async function asignarMonedas() {
+  const usuarioDestino = document.getElementById('asig-usuario').value;
+  const cantidad = parseInt(document.getElementById('asig-cantidad').value);
+  const motivo = document.getElementById('asig-motivo').value.trim() || 'Ajuste manual';
+  if (isNaN(cantidad) || cantidad === 0) { showToast('Ingresá una cantidad válida', 'error'); return; }
+  const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuarioDestino).single();
+  if (!target) return;
+  const nuevas = Math.max(0, target.monedas + cantidad);
+  await db.from('movimientos').insert({ usuario: usuarioDestino, descripcion: motivo, monedas: cantidad });
+  await db.from('usuarios').update({ monedas: nuevas }).eq('identificac', target.identificac);
+  showToast('✅ ' + (cantidad > 0 ? '+' : '') + cantidad + ' monedas a @' + usuarioDestino, 'success');
+  document.getElementById('asig-cantidad').value = '';
+  document.getElementById('asig-motivo').value = '';
+  if (usuarioDestino === currentUser.usuario) { currentUser.monedas = nuevas; saveSession(currentUser); updateTopbarCoins(nuevas); }
+}
+
+async function crearUsuario() {
+  const nombre = document.getElementById('new-nombre').value.trim();
+  const usuario = document.getElementById('new-usuario').value.trim();
+  const pass = document.getElementById('new-pass').value;
+  const rol = document.getElementById('new-rol').value;
+  if (!nombre || !usuario || !pass) { showToast('Completá todos los campos', 'error'); return; }
+  const { error } = await db.from('usuarios').insert({ nombre, usuario, contrasena: pass, rol, monedas: 0 });
+  if (error) { showToast('Error: el usuario ya existe', 'error'); return; }
+  showToast('✅ Usuario creado', 'success');
+  document.getElementById('new-nombre').value = '';
+  document.getElementById('new-usuario').value = '';
+  document.getElementById('new-pass').value = '';
+  loadAdminUsers(); fillUserSelects();
+}
+
+async function loadAdminUsers() {
+  const { data } = await db.from('usuarios').select('*').order('nombre');
+  document.getElementById('users-table').innerHTML = (data||[]).map(u => `
+    <tr>
+      <td>${u.nombre}</td><td>@${u.usuario}</td>
+      <td><span class="badge ${u.rol==='admin'?'badge-purple':'badge-blue'}">${u.rol}</span></td>
+      <td>🪙 ${u.monedas}</td>
+      <td>${u.identificac !== currentUser.identificac
+        ? `<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.identificac}','${u.nombre}')">Eliminar</button>`
+        : '<span style="color:var(--text-dim);font-size:12px">Sos vos</span>'}</td>
+    </tr>`).join('');
+}
+
+async function eliminarUsuario(id, nombre) {
+  if (!confirm('¿Eliminar a ' + nombre + '?')) return;
+  await db.from('usuarios').delete().eq('identificac', id);
+  showToast('Usuario eliminado', 'success');
+  loadAdminUsers(); fillUserSelects();
+}
+
+async function crearPremio() {
+  const desc = document.getElementById('new-premio-desc').value.trim();
+  const costo = parseInt(document.getElementById('new-premio-costo').value);
+  if (!desc || isNaN(costo)) { showToast('Completá los campos', 'error'); return; }
+  await db.from('Premios').insert({ descripcion: desc, costo });
+  showToast('✅ Premio agregado', 'success');
+  document.getElementById('new-premio-desc').value = '';
+  document.getElementById('new-premio-costo').value = '';
+  loadAdminPremios();
+}
+
+async function loadAdminPremios() {
+  const { data } = await db.from('Premios').select('*').order('costo');
+  document.getElementById('premios-admin-table').innerHTML = (data||[]).map(p => `
+    <tr>
+      <td>${getPremioIcon(p.descripcion)} ${p.descripcion}</td>
+      <td>🪙 ${p.costo}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="eliminarPremio(${p.id})">Eliminar</button></td>
+    </tr>`).join('');
+}
+
+async function eliminarPremio(id) {
+  if (!confirm('¿Eliminar este premio?')) return;
+  await db.from('Premios').delete().eq('id', id);
+  showToast('Premio eliminado', 'success');
+  loadAdminPremios();
+}
+
+async function loadAdminCanjes() {
+  const { data } = await db.from('Canjes').select('*').eq('estado', 'pendiente').order('created_at');
+  if (!data || data.length === 0) {
+    document.getElementById('canjes-admin-list').innerHTML = '<div class="empty"><div class="icon">✅</div><p>No hay canjes pendientes</p></div>';
+    return;
+  }
+  document.getElementById('canjes-admin-list').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Usuario</th><th>Premio</th><th>Costo</th><th>Fecha</th><th>Acciones</th></tr></thead>
+    <tbody>${data.map(c => {
+      const fecha = new Date(c.created_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+      return `<tr>
+        <td>@${c.usuario}</td><td>${c.premio}</td><td>🪙 ${c.costo}</td><td>${fecha}</td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-green btn-sm" onclick="resolverCanje(${c.id},'aprobado')">✅ Aprobar</button>
+          <button class="btn btn-danger btn-sm" onclick="resolverCanje(${c.id},'rechazado',${c.costo},'${c.usuario}')">❌ Rechazar</button>
+        </td></tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+async function resolverCanje(id, estado, costo, usuario) {
+  await db.from('Canjes').update({ estado }).eq('id', id);
+  if (estado === 'rechazado' && costo && usuario) {
+    const { data: target } = await db.from('usuarios').select('monedas,identificac').eq('usuario', usuario).single();
+    if (target) {
+      await db.from('usuarios').update({ monedas: target.monedas + costo }).eq('identificac', target.identificac);
+      await db.from('movimientos').insert({ usuario, descripcion: 'Canje rechazado - devolución', monedas: costo });
+    }
+  }
+  showToast(estado === 'aprobado' ? '✅ Canje aprobado' : 'Canje rechazado, monedas devueltas', estado === 'aprobado' ? 'success' : 'error');
+  loadAdminCanjes();
+}
+
+function showAdminTab(tab) {
+  document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('atab-' + tab).classList.add('active');
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (type||'success') + ' show';
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ─── AUTO-LOGIN ───────────────────────────────────────────
+(async () => {
+  const saved = getSavedSession();
+  if (saved) {
+    const { data, error } = await db.from('usuarios').select('*').eq('identificac', saved.identificac).single();
+    if (!error && data) { currentUser = data; saveSession(data); initApp(); } else { clearSession(); }
+  }
+})();
+</script>
+<style>
+  :root {
+    --gold: #F5C842;
+    --gold-light: #FDE98A;
+    --gold-dark: #C9960A;
+    --dark: #0F0F1A;
+    --dark2: #1A1A2E;
+    --dark3: #252540;
+    --dark4: #2E2E50;
+    --text: #F0EDE4;
+    --text-dim: #9B97B2;
+    --green: #2ECC71;
+    --red: #E74C3C;
+    --blue: #5B8DEF;
+    --purple: #8B5CF6;
+    --radius: 14px;
+    --radius-sm: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--dark);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── LOGIN ── */
+  #login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at 50% 0%, rgba(245,200,66,0.15) 0%, var(--dark) 65%);
+  }
+
+  .login-card {
+    background: var(--dark2);
+    border: 1px solid rgba(245,200,66,0.2);
+    border-radius: 20px;
+    padding: 48px 40px;
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+  }
+
+  .login-logo {
+    font-size: 48px;
+    margin-bottom: 8px;
+  }
+
+  .login-title {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--gold);
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+
+  .login-subtitle {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 36px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+    text-align: left;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 6px;
+  }
+
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%;
+    background: var(--dark3);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+    font-family: inherit;
+  }
+
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    border-color: var(--gold);
+  }
+
+  .form-group select option { background: var(--dark3); }
+
+  .btn {
+    width: 100%;
+    padding: 13px;
+    border-radius: var(--radius-sm);
+    border: none;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.3px;
+  }
+
+  .btn-gold {
+    background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color: #0F0F1A;
+  }
+
+  .btn-gold:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(245,200,66,0.3); }
+  .btn-gold:active { transform: translateY(0); }
+
+  .btn-outline {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: var(--text-dim);
+    margin-top: 8px;
+  }
+  .btn-outline:hover { border-color: var(--gold); color: var(--gold); }
+
+  .btn-sm {
+    width: auto;
+    padding: 8px 16px;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+  }
+
+  .btn-danger { background: var(--red); color: white; }
+  .btn-danger:hover { background: #c0392b; }
+
+  .btn-green { background: var(--green); color: #0F0F1A; font-weight: 700; }
+  .btn-green:hover { background: #27ae60; }
+
+  .error-msg {
+    background: rgba(231,76,60,0.15);
+    border: 1px solid rgba(231,76,60,0.3);
+    color: #ff6b6b;
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-top: 12px;
+    display: none;
+  }
+
+  /* ── APP SHELL ── */
+  #app { display: none; min-height: 100vh; }
+
+  .topbar {
+    background: var(--dark2);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 0 24px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 800;
+    font-size: 18px;
+    color: var(--gold);
+    letter-spacing: -0.3px;
+  }
+
+  .topbar-brand span { font-size: 22px; }
+
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .topbar-user {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .topbar-user strong { color: var(--text); }
+
+  .topbar-coins {
+    background: linear-gradient(135deg, rgba(245,200,66,0.15), rgba(245,200,66,0.05));
+    border: 1px solid rgba(245,200,66,0.3);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gold);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .logout-btn {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text-dim);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .logout-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── NAV ── */
+  .nav {
+    background: var(--dark2);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex;
+    padding: 0 24px;
+    gap: 4px;
+    overflow-x: auto;
+  }
+
+  .nav-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 14px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .nav-btn:hover { color: var(--text); }
+  .nav-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+  /* ── CONTENT ── */
+  .content {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px;
+  }
+
+  .section { display: none; }
+  .section.active { display: block; }
+
+  .page-title {
+    font-size: 22px;
+    font-weight: 800;
+    margin-bottom: 24px;
+    color: var(--text);
+  }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--dark2);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+
+  .card-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+  /* ── STAT CARDS ── */
+  .stat-card {
+    background: var(--dark3);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+
+  .stat-card .label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .stat-card .value {
+    font-size: 32px;
+    font-weight: 900;
+    color: var(--gold);
+    line-height: 1;
+  }
+
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.blue { color: var(--blue); }
+
+  .stat-card .sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* ── COINS BIG ── */
+  .coins-hero {
+    background: linear-gradient(135deg, var(--dark3), var(--dark4));
+    border: 1px solid rgba(245,200,66,0.2);
+    border-radius: var(--radius);
+    padding: 32px;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  .coins-hero .icon { font-size: 56px; margin-bottom: 8px; }
+  .coins-hero .amount {
+    font-size: 72px;
+    font-weight: 900;
+    color: var(--gold);
+    line-height: 1;
+    letter-spacing: -3px;
+  }
+  .coins-hero .label { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
+
+  /* ── TABLA ── */
+  .table-wrap { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  tbody tr {
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+  tbody td {
+    padding: 12px 14px;
+    color: var(--text);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-gold { background: rgba(245,200,66,0.15); color: var(--gold); }
+  .badge-green { background: rgba(46,204,113,0.15); color: var(--green); }
+  .badge-blue { background: rgba(91,141,239,0.15); color: var(--blue); }
+  .badge-red { background: rgba(231,76,60,0.15); color: var(--red); }
+  .badge-purple { background: rgba(139,92,246,0.15); color: var(--purple); }
+
+  /* ── PREMIOS GRID ── */
+  .premio-card {
+    background: var(--dark3);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: var(--radius);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.2s;
+  }
+
+  .premio-card:hover { border-color: rgba(245,200,66,0.3); }
+
+  .premio-icon { font-size: 32px; }
+  .premio-name { font-size: 16px; font-weight: 700; }
+  .premio-cost {
+    font-size: 22px;
+    font-weight: 900;
+    color: var(--gold);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .premio-cost span { font-size: 13px; color: var(--text-dim); font-weight: 400; }
+
+  /* ── RANKING ── */
+  .rank-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s;
+  }
+
+  .rank-item:hover { background: rgba(255,255,255,0.03); }
+
+  .rank-pos {
+    font-size: 20px;
+    font-weight: 900;
+    color: var(--text-dim);
+    width: 32px;
+    text-align: center;
+  }
+
+  .rank-pos.gold { color: var(--gold); }
+  .rank-pos.silver { color: #C0C0C0; }
+  .rank-pos.bronze { color: #CD7F32; }
+
+  .rank-name { flex: 1; font-weight: 600; }
+  .rank-coins { font-weight: 800; color: var(--gold); }
+
+  /* ── MOVIMIENTO ITEM ── */
+  .mov-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .mov-item:last-child { border-bottom: none; }
+
+  .mov-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .mov-icon.plus { background: rgba(46,204,113,0.15); }
+  .mov-icon.minus { background: rgba(231,76,60,0.15); }
+
+  .mov-desc { flex: 1; }
+  .mov-desc .title { font-size: 14px; font-weight: 600; }
+  .mov-desc .date { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .mov-amount {
+    font-size: 16px;
+    font-weight: 800;
+  }
+
+  .mov-amount.plus { color: var(--green); }
+  .mov-amount.minus { color: var(--red); }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    display: none;
+    padding: 20px;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--dark2);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 20px;
+    padding: 32px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .modal-title {
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 24px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 24px;
+  }
+
+  .modal-actions .btn { width: auto; flex: 1; }
+
+  /* ── TOAST ── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--dark3);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 9999;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s;
+    max-width: 320px;
+  }
+
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: rgba(46,204,113,0.3); color: var(--green); }
+  .toast.error { border-color: rgba(231,76,60,0.3); color: var(--red); }
+
+  /* ── LOADING ── */
+  .spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(245,200,66,0.2);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: 40px auto;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-area { text-align: center; padding: 40px; }
+
+  /* ── EMPTY STATE ── */
+  .empty {
+    text-align: center;
+    padding: 48px;
+    color: var(--text-dim);
+  }
+  .empty .icon { font-size: 40px; margin-bottom: 12px; }
+  .empty p { font-size: 14px; }
+
+  /* ── ADMIN TABS ── */
+  .admin-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    background: var(--dark3);
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    width: fit-content;
+  }
+
+  .admin-tab {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 8px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s;
+  }
+
+  .admin-tab.active { background: var(--gold); color: var(--dark); }
+
+  .admin-section { display: none; }
+  .admin-section.active { display: block; }
+
+  /* ── PRODUCTO BADGE ── */
+  .prod-icon { font-size: 18px; }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 700px) {
+    .grid-3, .grid-4 { grid-template-columns: 1fr 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .content { padding: 20px 16px; }
+    .topbar { padding: 0 16px; }
+    .coins-hero .amount { font-size: 52px; }
+  }
+
+  @media (max-width: 480px) {
+    .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .nav { gap: 0; }
+    .nav-btn { padding: 12px 10px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">🪙</div>
+    <div class="login-title">Central Coins</div>
+    <div class="login-subtitle">Plataforma de recompensas del call center</div>
+    <div class="form-group">
+      <label>Usuario</label>
+      <input type="text" id="login-user" placeholder="tu usuario" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>Contraseña</label>
+      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn btn-gold" onclick="doLogin()">Entrar</button>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <div class="topbar-brand"><span>🪙</span> Central Coins</div>
+    <div class="topbar-right">
+      <div class="topbar-coins" id="topbar-coins">🪙 0</div>
+      <div class="topbar-user">Hola, <strong id="topbar-name">-</strong></div>
+      <button class="logout-btn" onclick="logout()">Salir</button>
+    </div>
+  </div>
+
+  <div class="nav" id="main-nav">
+    <button class="nav-btn active" onclick="showSection('inicio')" data-sec="inicio">🏠 Inicio</button>
+    <button class="nav-btn" onclick="showSection('monedas')" data-sec="monedas">🪙 Mis Monedas</button>
+    <button class="nav-btn" onclick="showSection('tienda')" data-sec="tienda">🛍️ Tienda</button>
+    <button class="nav-btn" onclick="showSection('ranking')" data-sec="ranking">🏆 Ranking</button>
+    <button class="nav-btn admin-only" onclick="showSection('admin')" data-sec="admin">👨‍💼 Admin</button>
+  </div>
+
+  <div class="content">
+
+    <!-- INICIO -->
+    <div class="section active" id="sec-inicio">
+      <div class="coins-hero">
+        <div class="icon">🪙</div>
+        <div class="amount" id="home-coins">0</div>
+        <div class="label">Central Coins disponibles</div>
+      </div>
+
+      <div class="grid-3" style="margin-bottom:20px">
+        <div class="stat-card">
+          <div class="label">Ventas hoy</div>
+          <div class="value green" id="home-ventas-hoy">0</div>
+          <div class="sub">transacciones</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Monedas ganadas hoy</div>
+          <div class="value" id="home-ganadas-hoy">0</div>
+          <div class="sub">Central Coins</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Tu posición</div>
+          <div class="value blue" id="home-posicion">#-</div>
+          <div class="sub">en el ranking</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🏆 Top 5 del día</div>
+        <div id="home-top5"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- MONEDAS -->
+    <div class="section" id="sec-monedas">
+      <p class="page-title">🪙 Mis Monedas</p>
+      <div class="card">
+        <div class="card-title">Historial de movimientos</div>
+        <div id="mov-list"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- TIENDA -->
+    <div class="section" id="sec-tienda">
+      <p class="page-title">🛍️ Tienda de premios</p>
+      <div id="premios-grid" class="grid-3"></div>
+
+      <div class="card" style="margin-top:20px">
+        <div class="card-title">Mis canjes</div>
+        <div id="canjes-list"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- RANKING -->
+    <div class="section" id="sec-ranking">
+      <p class="page-title">🏆 Ranking</p>
+      <div class="admin-tabs" id="ranking-tab-btns"></div>
+      <div class="card">
+        <div class="card-title" id="ranking-label">Top vendedores</div>
+        <div id="ranking-list"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- ADMIN -->
+    <div class="section" id="sec-admin">
+      <p class="page-title">👨‍💼 Panel de administrador</p>
+
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="showAdminTab('ventas')">📝 Cargar venta</button>
+        <button class="admin-tab" onclick="showAdminTab('monedas')">🪙 Asignar monedas</button>
+        <button class="admin-tab" onclick="showAdminTab('usuarios')">👥 Usuarios</button>
+        <button class="admin-tab" onclick="showAdminTab('premios-admin')">🎁 Premios</button>
+        <button class="admin-tab" onclick="showAdminTab('canjes-admin')">📋 Canjes pendientes</button>
+      </div>
+
+      <!-- Cargar venta -->
+      <div class="admin-section active" id="atab-ventas">
+        <div class="card">
+          <div class="card-title">Registrar venta</div>
+          <div class="form-group">
+            <label>Operador</label>
+            <select id="venta-usuario"></select>
+          </div>
+          <div class="form-group">
+            <label>Producto</label>
+            <select id="venta-producto" onchange="updateVentaCoins()"></select>
+          </div>
+          <div style="background:var(--dark3);border-radius:var(--radius-sm);padding:14px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+            <span style="font-size:24px">🪙</span>
+            <div>
+              <div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Monedas a otorgar</div>
+              <div style="font-size:22px;font-weight:900;color:var(--gold)" id="venta-coins-preview">-</div>
+            </div>
+          </div>
+          <button class="btn btn-gold" onclick="cargarVenta()">✅ Registrar venta</button>
+        </div>
+      </div>
+
+      <!-- Asignar monedas -->
+      <div class="admin-section" id="atab-monedas">
+        <div class="card">
+          <div class="card-title">Asignar o quitar monedas manualmente</div>
+          <div class="form-group">
+            <label>Operador</label>
+            <select id="asig-usuario"></select>
+          </div>
+          <div class="form-group">
+            <label>Cantidad (negativo para quitar)</label>
+            <input type="number" id="asig-cantidad" placeholder="ej: 50 o -20">
+          </div>
+          <div class="form-group">
+            <label>Motivo</label>
+            <input type="text" id="asig-motivo" placeholder="ej: Bonus semanal">
+          </div>
+          <button class="btn btn-gold" onclick="asignarMonedas()">Aplicar</button>
+        </div>
+      </div>
+
+      <!-- Usuarios -->
+      <div class="admin-section" id="atab-usuarios">
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-title">Crear nuevo usuario</div>
+          <div class="grid-2">
+            <div class="form-group"><label>Nombre completo</label><input type="text" id="new-nombre" placeholder="Juan Pérez"></div>
+            <div class="form-group"><label>Usuario</label><input type="text" id="new-usuario" placeholder="juanp"></div>
+            <div class="form-group"><label>Contraseña</label><input type="password" id="new-pass" placeholder="••••••••"></div>
+            <div class="form-group"><label>Rol</label>
+              <select id="new-rol">
+                <option value="vendedor">Vendedor</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-gold btn-sm" onclick="crearUsuario()">Crear usuario</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Usuarios registrados</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Monedas</th><th>Acción</th></tr></thead>
+              <tbody id="users-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Premios admin -->
+      <div class="admin-section" id="atab-premios-admin">
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-title">Agregar premio</div>
+          <div class="grid-2">
+            <div class="form-group"><label>Descripción</label><input type="text" id="new-premio-desc" placeholder="ej: Salida anticipada"></div>
+            <div class="form-group"><label>Costo en monedas</label><input type="number" id="new-premio-costo" placeholder="ej: 80"></div>
+          </div>
+          <button class="btn btn-gold btn-sm" onclick="crearPremio()">Agregar premio</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Premios actuales</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Premio</th><th>Costo</th><th>Acción</th></tr></thead>
+              <tbody id="premios-admin-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Canjes pendientes -->
+      <div class="admin-section" id="atab-canjes-admin">
+        <div class="card">
+          <div class="card-title">Canjes pendientes de aprobación</div>
+          <div id="canjes-admin-list"><div class="spinner"></div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- MODAL canje -->
+<div class="modal-overlay" id="modal-canje">
+  <div class="modal">
+    <div class="modal-title">🛍️ Canjear premio</div>
+    <p style="color:var(--text-dim);font-size:14px;margin-bottom:16px">¿Confirmar el canje de:</p>
+    <div style="font-size:18px;font-weight:700;margin-bottom:8px" id="modal-canje-nombre">-</div>
+    <div style="font-size:28px;font-weight:900;color:var(--gold);margin-bottom:8px" id="modal-canje-costo">-</div>
+    <p style="color:var(--text-dim);font-size:13px">Tu saldo actual: <strong id="modal-canje-saldo" style="color:var(--text)">0</strong> 🪙</p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('modal-canje')">Cancelar</button>
+      <button class="btn btn-gold" onclick="confirmarCanje()">Confirmar canje</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+const SUPABASE_URL = 'https://iflmcrghdjkhirtzuqqq.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmbG1jcmdoZGpraGlydHp1cXFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3OTQzMDEsImV4cCI6MjA5NzM3MDMwMX0.UmmMTDA8tp1dNnFmQRBc38iWVPNaylhOWLqlY3jCYlo';
 
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
