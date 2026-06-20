@@ -618,6 +618,22 @@
     .nav { gap: 0; }
     .nav-btn { padding: 12px 10px; font-size: 12px; }
   }
+
+  .emoji-opt {
+    background: var(--dark3);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    font-size: 22px;
+    width: 44px;
+    height: 44px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .emoji-opt:hover { border-color: rgba(245,200,66,0.4); background: var(--dark4); }
+  .emoji-opt.selected { border-color: var(--gold); background: rgba(245,200,66,0.1); }
 </style>
 </head>
 <body>
@@ -812,8 +828,35 @@
         <div class="card" style="margin-bottom:20px">
           <div class="card-title">Agregar premio</div>
           <div class="grid-2">
-            <div class="form-group"><label>Descripción</label><input type="text" id="new-premio-desc" placeholder="ej: Salida anticipada"></div>
+            <div class="form-group"><label>Descripción</label><input type="text" id="new-premio-desc" placeholder="ej: Entradas de cine"></div>
             <div class="form-group"><label>Costo en monedas</label><input type="number" id="new-premio-costo" placeholder="ej: 80"></div>
+          </div>
+          <div class="form-group">
+            <label>Ícono del premio</label>
+            <div id="emoji-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
+              <button type="button" class="emoji-opt" data-emoji="⏰" onclick="selectEmoji(this)">⏰</button>
+              <button type="button" class="emoji-opt" data-emoji="🎁" onclick="selectEmoji(this)">🎁</button>
+              <button type="button" class="emoji-opt" data-emoji="🛵" onclick="selectEmoji(this)">🛵</button>
+              <button type="button" class="emoji-opt" data-emoji="🎉" onclick="selectEmoji(this)">🎉</button>
+              <button type="button" class="emoji-opt" data-emoji="🍝" onclick="selectEmoji(this)">🍝</button>
+              <button type="button" class="emoji-opt" data-emoji="☕" onclick="selectEmoji(this)">☕</button>
+              <button type="button" class="emoji-opt" data-emoji="🎬" onclick="selectEmoji(this)">🎬</button>
+              <button type="button" class="emoji-opt" data-emoji="🎟️" onclick="selectEmoji(this)">🎟️</button>
+              <button type="button" class="emoji-opt" data-emoji="🍕" onclick="selectEmoji(this)">🍕</button>
+              <button type="button" class="emoji-opt" data-emoji="🍔" onclick="selectEmoji(this)">🍔</button>
+              <button type="button" class="emoji-opt" data-emoji="🏖️" onclick="selectEmoji(this)">🏖️</button>
+              <button type="button" class="emoji-opt" data-emoji="💳" onclick="selectEmoji(this)">💳</button>
+              <button type="button" class="emoji-opt" data-emoji="🚪" onclick="selectEmoji(this)">🚪</button>
+              <button type="button" class="emoji-opt" data-emoji="🎮" onclick="selectEmoji(this)">🎮</button>
+              <button type="button" class="emoji-opt" data-emoji="🏆" onclick="selectEmoji(this)">🏆</button>
+              <button type="button" class="emoji-opt" data-emoji="💆" onclick="selectEmoji(this)">💆</button>
+              <button type="button" class="emoji-opt" data-emoji="🛍️" onclick="selectEmoji(this)">🛍️</button>
+              <button type="button" class="emoji-opt" data-emoji="🎸" onclick="selectEmoji(this)">🎸</button>
+              <button type="button" class="emoji-opt" data-emoji="⚽" onclick="selectEmoji(this)">⚽</button>
+              <button type="button" class="emoji-opt" data-emoji="🎀" onclick="selectEmoji(this)">🎀</button>
+            </div>
+            <input type="hidden" id="new-premio-icon" value="">
+            <div style="margin-top:10px;font-size:13px;color:var(--text-dim)">Seleccionado: <span id="emoji-selected" style="font-size:22px">—</span></div>
           </div>
           <button class="btn btn-gold btn-sm" onclick="crearPremio()">Agregar premio</button>
         </div>
@@ -1036,7 +1079,7 @@ async function loadPremios() {
   if (!data) return;
   document.getElementById('premios-grid').innerHTML = data.map(p => `
     <div class="premio-card">
-      <div class="premio-icon">${getPremioIcon(p.descripcion)}</div>
+      <div class="premio-icon">${p.icono || getPremioIcon(p.descripcion)}</div>
       <div class="premio-name">${p.descripcion}</div>
       <div class="premio-cost">${p.costo} <span>Central Coins</span></div>
       <button class="btn btn-gold btn-sm" data-id="${p.id}" data-nombre="${p.descripcion}" data-costo="${p.costo}" onclick="abrirCanjeBtn(this)">Canjear</button>
@@ -1237,14 +1280,26 @@ async function eliminarUsuario(id, nombre) {
   loadAdminUsers(); fillUserSelects();
 }
 
+function selectEmoji(btn) {
+  document.querySelectorAll('.emoji-opt').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  document.getElementById('new-premio-icon').value = btn.dataset.emoji;
+  document.getElementById('emoji-selected').textContent = btn.dataset.emoji;
+}
+
 async function crearPremio() {
   const desc = document.getElementById('new-premio-desc').value.trim();
   const costo = parseInt(document.getElementById('new-premio-costo').value);
+  const icon = document.getElementById('new-premio-icon').value;
   if (!desc || isNaN(costo)) { showToast('Completá los campos', 'error'); return; }
-  await db.from('Premios').insert({ descripcion: desc, costo });
+  if (!icon) { showToast('Elegí un ícono para el premio', 'error'); return; }
+  await db.from('Premios').insert({ descripcion: desc, costo, icono: icon });
   showToast('✅ Premio agregado', 'success');
   document.getElementById('new-premio-desc').value = '';
   document.getElementById('new-premio-costo').value = '';
+  document.getElementById('new-premio-icon').value = '';
+  document.getElementById('emoji-selected').textContent = '—';
+  document.querySelectorAll('.emoji-opt').forEach(b => b.classList.remove('selected'));
   loadAdminPremios();
 }
 
@@ -1252,7 +1307,7 @@ async function loadAdminPremios() {
   const { data } = await db.from('Premios').select('*').order('costo');
   document.getElementById('premios-admin-table').innerHTML = (data||[]).map(p => `
     <tr>
-      <td>${getPremioIcon(p.descripcion)} ${p.descripcion}</td>
+      <td>${p.icono || getPremioIcon(p.descripcion)} ${p.descripcion}</td>
       <td>🪙 ${p.costo}</td>
       <td><button class="btn btn-danger btn-sm" onclick="eliminarPremio(${p.id})">Eliminar</button></td>
     </tr>`).join('');
